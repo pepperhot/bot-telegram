@@ -62,10 +62,10 @@ def get_album_image(song, artist):
 # ------------------------azlyrics Images--------------- #
         response = requests.get(url)
         if response.status_code == 200:
-            album_img_tag = BeautifulSoup(response.text, 'html.parser').find('img', {'class': 'album-image'})
+            album_tag = BeautifulSoup(response.text, 'html.parser').find('img', {'class': 'album-image'})
             
-            if album_img_tag and 'src' in album_img_tag.attrs:
-                img_url = "https://www.azlyrics.com/" + album_img_tag['src']
+            if album_tag and 'src' in album_tag.attrs:
+                img_url = "https://www.azlyrics.com/" + album_tag['src']
                 img_data = requests.get(img_url).content
                 return Image.open(BytesIO(img_data))
 # ------------------------Google Images--------------- #
