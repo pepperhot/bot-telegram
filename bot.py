@@ -8,6 +8,7 @@ from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, 
 import os
 import textwrap
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -20,10 +21,10 @@ color_map = {
     "🟣 Violet": (120, 81, 169)
 }
 
-def edit(x: str) -> str:
-    return "".join(c for c in x if c not in "éèêëàâôûùçîïô.;/:’,?\"'()[]<>|\\~@-#$%^&*+=_ ").lower()
+def edit(x):
+    return "".join(c for c in x if c not in "éèêëàâôûùçîïô.;/:’,?!\"'()[]<>|\\~@-#$%^&*+=_ ").lower()
 
-def split_message(user_message: str):
+def split_message(user_message):
     colors = list(color_map.keys())
     if user_message in colors:
         return False, None, None, user_message
@@ -35,7 +36,7 @@ def split_message(user_message: str):
     artist, song = parts[0].strip(), parts[1].strip()
     return True, edit(song), edit(artist), song
 
-def parole(song, artist):
+def parole(song, artist, max_chars=30):
     url = f'https://www.azlyrics.com/lyrics/{artist}/{song}.html'
     try:
         response = requests.get(url)
@@ -48,63 +49,90 @@ def parole(song, artist):
                     lyrics_raw = div.get_text(separator='\n').strip()
                     if len(lyrics_raw.splitlines()) > 10:
                         lines = lyrics_raw.split('\n')
-                        cleaned = [line.strip() for line in lines if line.strip() and "(feat." not in line and "Submit Corrections" not in line]
-                        paroles = [line for line in cleaned if not (line.startswith('[') and line.endswith(':]'))]
-                        return paroles
+                        cleaned = [line.strip()for line in lines if line.strip()and "(feat." not in line and "Submit Corrections" not in line and not (line.startswith('[') and line.endswith(']'))]
+                        result = []
+                        for line in cleaned:
+                            chunks = textwrap.wrap(line, width=max_chars)
+                            result.extend(chunks)
+
+                        return result
     except Exception as e:
         print(f"Erreur lors de la récupération des paroles: {e}")
     return None
 
-def get_album_image(song: str, artist: str):
-    query = urllib.parse.quote(f"{artist} {song} album cover")
-    google_url = f"https://www.google.com/search?q={query}&tbm=isch"
-    headers = {"User-Agent": "Mozilla/5.0"}
+def get_album_cover(artist, song):
+    query = f"{artist} {song}"
+
+    # --------------iTunes--------------
     try:
-        google_response = requests.get(google_url, headers=headers)
-        if google_response.status_code == 200:
-            soup = BeautifulSoup(google_response.text, 'html.parser')
-            img_tags = soup.find_all("img")
-            if len(img_tags) > 1:
-                img_src = img_tags[1].get("src")
-                if img_src and img_src.startswith("http"):
-                    img_data = requests.get(img_src).content
-                    return Image.open(BytesIO(img_data)).convert("RGB")
-    except Exception as e:
-        print(f"Erreur lors de la récupération de l'image: {e}")
+        url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&media=music&limit=1"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("resultCount", 0) > 0:
+            img_url = data["results"][0]["artworkUrl100"].replace("100x100", "1200x1200")
+            img_data = requests.get(img_url).content
+            return Image.open(BytesIO(img_data)), f"   iTunes Image: {img_url}"
+    except:
+        pass
+
+    # --------------azlyrics--------------
+    try:
+        az_url = f"https://www.azlyrics.com/lyrics/{song}/{artist}.html"
+        response = requests.get(az_url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        img_tag = soup.find('img', {'class': 'album-image'})
+        if img_tag and 'src' in img_tag.attrs:
+            img_url = "https://www.azlyrics.com/" + img_tag['src']
+            img_data = requests.get(img_url).content
+            return Image.open(BytesIO(img_data)), f"   azlyrics Image: {img_url}"
+    except:
+        pass
+
+    # --------------Google--------------
+    try:
+        search_query = urllib.parse.quote(f"{artist} {song} album cover")
+        google_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(google_url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        img_tags = soup.find_all("img")
+        if len(img_tags) > 1:
+            img_src = img_tags[1].get("src")
+            if img_src and img_src.startswith("http"):
+                return Image.open(BytesIO(requests.get(img_src).content)), f"   Google Image: {img_src}"
+    except:
+        pass
+
+    print("❌ Impossible de récupérer l'image de l'album.")
     return None
-
+            
 def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
-    base = Image.new("RGB", (1080, 1920), color=bg_color)
+
+    W, H = 1080, 1920
+    base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
+    album_resized = album_image.resize((600, 600), Image.LANCZOS)
 
-    album_resized = album_image.resize((600, 700))
-    if side != 'right':
-        half = album_resized.crop((300, 0, 600, 700))
-        x_pos = 0
-    else:
-        half = album_resized.crop((0, 0, 300, 700))
-        x_pos = 780
-    base.paste(half, (x_pos, 575))
+    half = album_resized.crop((0, 0, 300, 600)) if side == 'right' else album_resized.crop((300, 0, 600, 600))
+    x_pos = 780 if side == 'right' else 0
 
-    font = ImageFont.truetype("arial.ttf", 40)
+    base.paste(half, (x_pos, H // 2 - 270))
 
-    wrapped_text = textwrap.fill(text, width=30)
-
-    bbox = draw.textbbox((0, 0), wrapped_text, font=font)
+    font = ImageFont.truetype("arial.ttf", 50)
+    wrapped_text = text
+    bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=10)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
 
-    if side == 'right':
-        text_x = (810 - text_width) // 2
-    else:
-        text_x = ((1080 - text_width) // 2) + 70
+    text_x = ((W - 300 - text_width) // 2) if side == 'right' else ((W - 300 - text_width) // 2) + 300
+    text_y = H // 2 - text_height // 2
 
-    text_y = ((1920 - text_height) // 2) - 100
-
-    i = 2
-    for dx in range(-i, i + 1):
-        for dy in range(-i, i + 1):
-            if dx != 0 or dy != 0:
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            if dx or dy:
                 draw.multiline_text((text_x + dx, text_y + dy), wrapped_text, font=font, fill="black", spacing=10)
 
     draw.multiline_text((text_x, text_y), wrapped_text, font=font, fill="white", spacing=10)
@@ -144,7 +172,7 @@ async def send_lyrics(update, context, index):
 
     if index > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Retour", callback_data=f"back:{index}"))
-    if index + 10 < len(lines):
+    if index + 2 < len(lines):
         nav_buttons.append(InlineKeyboardButton("▶️ Suite", callback_data=f"next:{index}"))
 
     keyboard.append([InlineKeyboardButton("✅ Valider ce bloc", callback_data=f"select:{index}")])
@@ -152,12 +180,14 @@ async def send_lyrics(update, context, index):
         keyboard.append(nav_buttons)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
-        
-    else:
-        await update.message.reply_text(text=text, reply_markup=reply_markup)
+    try:
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+            
+        else:
+            await update.message.reply_text(text=text, reply_markup=reply_markup)
+    except:
+        print("   freeze")
 
 async def button_handler(update, context):
     query = update.callback_query
@@ -177,7 +207,7 @@ async def button_handler(update, context):
 
     elif action == "select":
         lines = context.user_data.get("lyrics", [])
-        block = lines[current_index:current_index+10]
+        block = lines[current_index:current_index+15]
         if not block:
             await query.message.reply_text("Erreur : aucun bloc de paroles à cet index.")
             return
@@ -187,7 +217,7 @@ async def button_handler(update, context):
         titre = context.user_data.get("titre")
         artist = context.user_data.get("artist")
         song = context.user_data.get("song")
-        album_image = get_album_image(titre, artist)
+        album_image, url = get_album_cover(titre, artist)
 
         if album_image is None:
             await query.message.reply_text("Erreur lors de la récupération de l'image.")
@@ -204,6 +234,18 @@ async def button_handler(update, context):
         os.remove("img2.jpg")
         await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #playback #fyp #trend #foryou #{titre} #{artist}")
 
+def log_attempt(first_name, user_id, message, result, color):
+    now = datetime.now().strftime("%H:%M:%S")
+    print(f"[{now}] 🔍 {first_name} ({user_id})")
+    print(f"   ↪️ Message : {message}")
+    print(f"   🎨 Couleur : {color}")
+    print(f"   {"✅" if result else "❌"} Résultat : {'Succès' if result else 'Échec'}")
+    if result:
+        choose_line, titre, artist, song = split_message(message)
+        image, url = get_album_cover(titre, artist)
+        print(url)
+    print(50 * "-")
+
 async def echo(update, context):
     user = update.message.from_user
     user_id = user.id
@@ -211,11 +253,10 @@ async def echo(update, context):
     first_name = user.first_name or "Inconnu"
 
     choose_line, titre, artist, song = split_message(user_message)
-    message = f"🔍 {first_name} ({user_id}) → {user_message} couleur : {next((k for k, v in color_map.items() if v == user_colors.get(user_id)), '🔵 Bleu')}"
-    print(message+(80-len(message))*" ", end="")
+    color_name = next((k for k, v in color_map.items() if v == user_colors.get(user_id)), '🔵 Bleu')
 
     if choose_line == "Erreur, format attendu : artiste:titre":
-        print("❌ Tentative échouée")
+        log_attempt(first_name, user_id, user_message, False, color_name)
         await update.message.reply_text(choose_line)
         return
 
@@ -223,14 +264,15 @@ async def echo(update, context):
         user_colors[user_id] = emoji_to_rgb(song)
         await update.message.reply_text(f"🎨 Tu as choisi la couleur {song} !")
         return
-    
+
     all_lines = parole(titre, artist)
-    if not all_lines:
+    result = all_lines is not None
+    log_attempt(first_name, user_id, user_message, result, color_name)
+
+    if not result:
         await update.message.reply_text("Paroles introuvables.")
-        print("❌ Tentative échouée")
         return
 
-    print("✅ Tentative réussie")
     context.user_data["lyrics"] = all_lines
     context.user_data["index"] = 0
     context.user_data["titre"] = song
