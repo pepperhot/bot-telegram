@@ -109,9 +109,9 @@ def get_album_cover(artist, song):
     
     print("❌ Aucune image d'album trouvée")
     return None, None
-            
+
 def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
-    W, H = 1082, 1920
+    W, H = 1082, 1918
     base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
     album_resized = album_image.resize((600, 600), Image.LANCZOS)
@@ -138,7 +138,6 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
     draw.multiline_text((text_x, text_y), wrapped_text, font=font, fill="white", spacing=10)
 
     base.save(file)
-    print(f"✅ Image créée : {file}")
 
 async def pallette(update, context):
     boutons = [
@@ -173,7 +172,7 @@ async def send_lyrics(update, context, index):
         return
 
     block = lines[index:index+2]
-    text = "\n".join(block)
+    text = "\n".join(block[i] if isinstance(block[i], str) else " ".join(block[i]) for i in range(len(block)))
 
     keyboard = []
     nav_buttons = []
@@ -219,13 +218,14 @@ async def button_handler(update, context):
             await query.message.reply_text("Erreur : aucun bloc de paroles à cet index.")
             return
         
-        text = "\n".join(block)
+        text = text = "\n".join(line for sublist in block for line in sublist)
+
         user_id = query.from_user.id
         bg_color = user_colors.get(user_id, (11, 38, 117))
         titre = context.user_data.get("titre")
         artist = context.user_data.get("artist")
         song = context.user_data.get("song")
-        album_image, url_info = get_album_cover(titre, artist)
+        album_image, _ = get_album_cover(titre, artist)
 
         if album_image is None:
             await query.message.reply_text("❌ Erreur lors de la récupération de l'image.")
@@ -236,14 +236,14 @@ async def button_handler(update, context):
             create_image(song, album_image, "img1.jpg", side='right', bg_color=bg_color)
 
             with open("img1.jpg", "rb") as img1:
-                await query.message.reply_photo(photo=img1, timeout=120)
+                await query.message.reply_photo(photo=img1, read_timeout=300, write_timeout=300, connect_timeout=300)
             with open("img2.jpg", "rb") as img2:
-                await query.message.reply_photo(photo=img2, timeout=120)
-            
-            os.remove("img1.jpg") 
+                await query.message.reply_photo(photo=img2, read_timeout=300, write_timeout=300, connect_timeout=300)
+
+            os.remove("img1.jpg")
             os.remove("img2.jpg")
             
-            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #playbook #fyp #trend #foryou #{titre} #{artist}")
+            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #playbook #fyp #trend #foryou #{song} #{artist}")
         except Exception as e:
             print(f"❌ Erreur création/envoi images: {e}")
             await query.message.reply_text("❌ Erreur lors de la création des images")
@@ -306,8 +306,6 @@ def download_video(url, folder, filename):
     def my_hook(d):
         if d['status'] == 'downloading':
             print(f"📥 {d['filename']} {d['_percent_str']} à {d['_speed_str']} - ETA {d['_eta_str']}", end='\r')
-        elif d['status'] == 'finished':
-            print(f"\n✅ Téléchargement terminé : {d['filename']}")
 
     output_path = os.path.join(folder, f"{filename}.%(ext)s")
     
@@ -328,7 +326,7 @@ def download_video(url, folder, filename):
     video_path = os.path.join(folder, f"{filename}.mp4")
     if os.path.exists(video_path):
         return video_path
-    
+
 def generer_lyrics_txt(video_file, output_txt):
     try:
         model = WhisperModel("base", device="cpu", compute_type="float32")
@@ -634,11 +632,12 @@ async def button_handler_karaoke(update, context):
                 
             except Exception as e:
                 await update.callback_query.message.reply_text(f"❌ Erreur envoi vidéo : {str(e)[:100]}")
-                print(f"❌ Erreur détaillée envoi : {e}")
-
         except Exception as e:
             print(f"❌ Erreur création vidéo karaoke: {e}")
             await update.callback_query.message.reply_text(f"❌ Erreur création vidéo : {str(e)[:100]}")
+
+    for i in [output_karaoke, lyrics_path, video_path]:
+        os.remove(i) if os.path.exists(i) else None
 
 async def echo_karaoke(update, context):
     user = update.message.from_user
