@@ -156,8 +156,14 @@ def emoji_to_rgb(emoji: str):
     return color_map.get(emoji)
 
 async def start(update, context):
-    user = update.message.from_user
-    await update.message.reply_text(f"Salut {user.first_name}, envoie-moi artiste:titre ou lien YouTube pour commencer le karaoké !")
+    if update.message:
+        user = update.message.from_user
+    elif update.effective_user:
+        user = update.effective_user
+    else:
+        return
+    await update.message.reply_text(f"Salut {user.first_name}, voici mon bot telegram! ")
+    await update.message.reply_text("Commandes:\n    - /start : affiche ce message \n    -/lyrics : format de tiktok karoucelle \n    - /pallette : affiche les couleurs disponibles \n    -/karaoke : format de tiktok karaoke avec videos")
 
 async def send_lyrics(update, context, index):
     lines = context.user_data.get("lyrics", [])
@@ -519,17 +525,16 @@ async def echo_karaoke(update, context):
     await send_lyrics_karaoke(update, context, index=0)
 
 def main():
-    print("Bot fusionné lyrics + karaoke...")
+    print("Bot started...")
     application = Application.builder().token(TOKEN).build()
-
-    # --- bot karoucelle ---
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("pallette", pallette))
-    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(next|back|select).*"))
 
     async def karaoke_cmd(update, context):
         await update.message.reply_text("🎤 Mode Karaoke activé ! Envoie artiste:titre ou un lien YouTube")
         context.user_data["karaoke_mode"] = True
+
+    async def lyrics_cmd(update, context):
+        context.user_data["karaoke_mode"] = False
+        await update.message.reply_text("📝 Mode Lyrics activé ! Envoie artiste:titre")
 
     async def echo_global(update, context):
         if context.user_data.get("karaoke_mode", False):
@@ -537,10 +542,20 @@ def main():
         else:
             await echo(update, context)
 
-    # --- Handlers ajoutés ---
+    async def callback_router(update, context):
+        """Route les callbacks selon le mode actif"""
+        if context.user_data.get("karaoke_mode", False):
+            await button_handler_karaoke(update, context)
+        else:
+            await button_handler(update, context)
+
+    # --- Handlers ---
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("pallette", pallette))
     application.add_handler(CommandHandler("karaoke", karaoke_cmd))
+    application.add_handler(CommandHandler("lyrics", lyrics_cmd))
+    application.add_handler(CallbackQueryHandler(callback_router))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo_global))
-    application.add_handler(CallbackQueryHandler(button_handler_karaoke, pattern="^(karaoke_).*"))
 
     # --- Lancement ---
     application.run_polling()
