@@ -111,7 +111,7 @@ def get_album_cover(artist, song):
     return None, None
 
 def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
-    W, H = 1082, 1918
+    W, H = 1082, 1919
     base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
     album_resized = album_image.resize((600, 600), Image.LANCZOS)
@@ -139,7 +139,7 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
 
     base.save(file)
 
-async def pallette(update, context):
+async def pallette(update, _):
     boutons = [
         [KeyboardButton("🔵 Bleu"), KeyboardButton("🔴 Rouge")],
         [KeyboardButton("⚪ blanc"), KeyboardButton("🟣 Violet")]
@@ -155,7 +155,7 @@ async def pallette(update, context):
 def emoji_to_rgb(emoji: str):
     return color_map.get(emoji)
 
-async def start(update, context):
+async def start(update, _):
     if update.message:
         user = update.message.from_user
     elif update.effective_user:
@@ -306,6 +306,8 @@ def download_video(url, folder, filename):
     def my_hook(d):
         if d['status'] == 'downloading':
             print(f"📥 {d['filename']} {d['_percent_str']} à {d['_speed_str']} - ETA {d['_eta_str']}", end='\r')
+        elif d['status'] == 'finished':
+            print(f"\n✅ Téléchargement terminé, fusion en cours...")
 
     output_path = os.path.join(folder, f"{filename}.%(ext)s")
     
@@ -625,6 +627,9 @@ async def button_handler_karaoke(update, context):
                         connect_timeout=300
                     )
                 print(f"✅ Vidéo karaoke envoyée avec succès")
+
+                for i in [output_karaoke, lyrics_path, video_path]:
+                    os.remove(i) if os.path.exists(i) else None
                 
             except FileNotFoundError:
                 await update.callback_query.message.reply_text("❌ Fichier vidéo introuvable")
@@ -635,9 +640,6 @@ async def button_handler_karaoke(update, context):
         except Exception as e:
             print(f"❌ Erreur création vidéo karaoke: {e}")
             await update.callback_query.message.reply_text(f"❌ Erreur création vidéo : {str(e)[:100]}")
-
-    for i in [output_karaoke, lyrics_path, video_path]:
-        os.remove(i) if os.path.exists(i) else None
 
 async def echo_karaoke(update, context):
     user = update.message.from_user
