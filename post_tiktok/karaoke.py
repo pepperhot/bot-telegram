@@ -7,7 +7,10 @@ from faster_whisper import WhisperModel
 from moviepy.config import change_settings
 
 change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe"})
-
+from dotenv import load_dotenv
+load_dotenv()
+TOKEN = os.getenv("TOKEN")
+user_colors = {}
 FOLDER_PATH = r"C:\Users\FlowUP\github\bot-telegram"
 
 warnings.filterwarnings("ignore")
@@ -36,7 +39,13 @@ def download_video(url, folder, filename):
         'progress_hooks': [my_hook],
         'quiet': True,
         'no_warnings': True,
-        'concurrent_fragment_downloads': 5
+        'concurrent_fragment_downloads': 5,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate'
+        }
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -130,7 +139,7 @@ def text_with_shadow(text):
     np_img = numpy.array(img)
     return ImageClip(np_img).set_duration(2)
 
-def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt):
+def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duration_limit=60):
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Vidéo source introuvable : {video_path}")
@@ -161,7 +170,10 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt):
                     continue
 
         video_start = lyrics_lines[0][1]
-        video_end = min(video_start + 60, lyrics_lines[-1][1] + lyrics_lines[-1][2])
+        if duration_limit > 0:
+            video_end = min(video_start + duration_limit, lyrics_lines[-1][1] + lyrics_lines[-1][2])
+        else:
+            video_end = lyrics_lines[-1][1] + lyrics_lines[-1][2]
         base_clip = VideoFileClip(video_path, audio=True)
         
         video_segment = base_clip.subclip(video_start, video_end)
@@ -275,7 +287,7 @@ def process_song(artist, song, url):
     return lyrics_path_txt
 
 def log_attempt(first_name, user_id, message, result, color):
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] 🔍 {first_name} ({user_id})")
     print(f"   ↪️ Message : {message}")
     print(f"   🎨 Couleur : {color}")
@@ -378,7 +390,7 @@ async def echo_karaoke(update, context):
 
     if message:
         await update.message.reply_text("⏳ Traitement en cours...")
-        log_attempt(first_name, user_id, message, result=True, color=None, type="karaoke")
+        log_attempt(first_name, user_id, message, result=True, color=None)
 
     if message.startswith("https://www.youtube.com/watch?v="):
         try:
@@ -407,7 +419,7 @@ async def echo_karaoke(update, context):
         return
 
     try:
-        if message[-2:] == ("fr" or "en" or "es" or "it" or "de"):
+        if message[-2:] in ("fr", "en", "es", "it", "de"):
             global language
             language = message[-2:]
             message = message[:-2].strip()
