@@ -22,6 +22,7 @@ FOLDER_PATH = r"C:\Users\FlowUP\github\bot-telegram"
 
 warnings.filterwarnings("ignore")
 logging.getLogger("ctranslate2").setLevel(logging.ERROR)
+language = None
 
 color_map = {
     "🔵 Bleu": (11, 38, 117),
@@ -135,7 +136,7 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
             if dx or dy:
                 draw.multiline_text((text_x + dx, text_y + dy), wrapped_text, font=font, fill="black", spacing=10)
 
-    draw.multiline_text((text_x, text_y), wrapped_text, font=font, fill="white", spacing=10)
+    draw.multiline_text((text_x, text_y), wrapped_text, font=font, fill="black" if bg_color == (255, 255, 255) else "white", spacing=10)
 
     base.save(file)
 
@@ -243,7 +244,7 @@ async def button_handler(update, context):
             os.remove("img1.jpg")
             os.remove("img2.jpg")
             
-            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #playbook #fyp #trend #foryou #{song} #{artist}")
+            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #fyp #pourtoi #{song} #{artist}")
         except Exception as e:
             print(f"❌ Erreur création/envoi images: {e}")
             await query.message.reply_text("❌ Erreur lors de la création des images")
@@ -306,8 +307,6 @@ def download_video(url, folder, filename):
     def my_hook(d):
         if d['status'] == 'downloading':
             print(f"📥 {d['filename']} {d['_percent_str']} à {d['_speed_str']} - ETA {d['_eta_str']}", end='\r')
-        elif d['status'] == 'finished':
-            print(f"\n✅ Téléchargement terminé, fusion en cours...")
 
     output_path = os.path.join(folder, f"{filename}.%(ext)s")
     
@@ -332,7 +331,9 @@ def download_video(url, folder, filename):
 def generer_lyrics_txt(video_file, output_txt):
     try:
         model = WhisperModel("base", device="cpu", compute_type="float32")
-        segments, _ = model.transcribe(video_file, word_timestamps=True)
+        segments, _ = model.transcribe(
+            video_file, word_timestamps=True, language=language, beam_size=5, best_of=5
+        )
 
         with open(output_txt, "w", encoding="utf-8") as f:
             for seg in segments:
@@ -627,6 +628,7 @@ async def button_handler_karaoke(update, context):
                         connect_timeout=300
                     )
                 print(f"✅ Vidéo karaoke envoyée avec succès")
+                await update.callback_query.message.reply_text(f"{song} || {artist}\n#karaoke #fyp #pourtoi #{song} #{artist}")
 
                 for i in [output_karaoke, lyrics_path, video_path]:
                     os.remove(i) if os.path.exists(i) else None
@@ -679,9 +681,15 @@ async def echo_karaoke(update, context):
         return
 
     try:
+        if message[-2:] == ("fr" or "en" or "es" or "it" or "de"):
+            global language
+            language = message[-2:]
+            message = message[:-2].strip()
+            await update.message.reply_text(f"🌐 Langue définie sur : {language}")
+
         parts = message.split(":", 1)
         if len(parts) != 2:
-            await update.message.reply_text("❌ Format attendu : artiste:titre")
+            await update.message.reply_text("❌ Format attendu : artiste:titre(fr/en/es/it/de)")
             return
             
         artist, song = [x.strip() for x in parts]
