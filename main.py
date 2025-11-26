@@ -14,15 +14,12 @@ def main():
     print("Bot started...")
     application = Application.builder().token(TOKEN).build()
 
-    async def welcome(update, context):
-        await update.message.reply_text("Bot API lyrics started!")
-
     async def karaoke_cmd(update, context):
         await update.message.reply_text("🎤 Mode Karaoke activé ! Envoie artiste:titre ou un lien YouTube")
-        context.user_data["karaoke_mode"] = False
+        context.user_data["karaoke_mode"] = True
 
     async def lyrics_cmd(update, context):
-        context.user_data["karaoke_mode"] = True
+        context.user_data["karaoke_mode"] = False
         await update.message.reply_text("📝 Mode Lyrics activé ! Envoie artiste:titre")
 
     async def echo_global(update, context):
@@ -39,7 +36,6 @@ def main():
             await button_handler(update, context)
 
     # --- Handlers ---
-    application.add_handler(CommandHandler("welcomme", welcome))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("pallette", pallette))
     application.add_handler(CommandHandler("karaoke", karaoke_cmd))

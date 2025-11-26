@@ -123,7 +123,7 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
     base.save(file)
 
 def log_attempt(first_name, user_id, message, result, color):
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] 🔍 {first_name} ({user_id})")
     print(f"   ↪️ Message : {message}")
     print(f"   🎨 Couleur : {color}")
@@ -241,7 +241,7 @@ async def echo(update, context):
     color_name = next((k for k, v in color_map.items() if v == user_colors.get(user_id)), '🔵 Bleu')
 
     if choose_line == "Erreur, format attendu : artiste:titre":
-        log_attempt(first_name, user_id, message, False, color_name, type="lyrics")
+        log_attempt(first_name, user_id, message, False, color_name)
         await update.message.reply_text(choose_line)
         return
 
@@ -252,7 +252,7 @@ async def echo(update, context):
 
     all_lines = parole(titre, artist)
     result = all_lines is not None
-    log_attempt(first_name, user_id, message, result, color_name, type="lyrics")
+    log_attempt(first_name, user_id, message, result, color_name)
 
     if not result:
         return
