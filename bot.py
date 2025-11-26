@@ -18,7 +18,7 @@ change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.1-Q16-
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 user_colors = {}
-FOLDER_PATH = r"C:\Users\FlowUP\github\bot-telegram"
+FOLDER_PATH = r"C:\Users\Lucas\github\bot-telegram"
 
 warnings.filterwarnings("ignore")
 logging.getLogger("ctranslate2").setLevel(logging.ERROR)
