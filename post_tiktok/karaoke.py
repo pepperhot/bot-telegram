@@ -139,7 +139,7 @@ def text_with_shadow(text):
     np_img = numpy.array(img)
     return ImageClip(np_img).set_duration(2)
 
-def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt):
+def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duration_limit=60):
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Vidéo source introuvable : {video_path}")
@@ -170,7 +170,10 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt):
                     continue
 
         video_start = lyrics_lines[0][1]
-        video_end = min(video_start + 60, lyrics_lines[-1][1] + lyrics_lines[-1][2])
+        if duration_limit > 0:
+            video_end = min(video_start + duration_limit, lyrics_lines[-1][1] + lyrics_lines[-1][2])
+        else:
+            video_end = lyrics_lines[-1][1] + lyrics_lines[-1][2]
         base_clip = VideoFileClip(video_path, audio=True)
         
         video_segment = base_clip.subclip(video_start, video_end)
