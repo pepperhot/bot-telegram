@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 user_colors = {}
+user_fonts = {}
+
 color_map = {
     "🔵 Bleu": (11, 38, 117),
     "🔴 Rouge": (179, 38, 30),
@@ -13,13 +15,24 @@ color_map = {
     "🟣 Violet": (120, 81, 169)
 }
 
+font_map = {
+    "Arial": "arial.ttf",
+    "Angel Wish": "font/Angel wish.ttf",
+    "Slow Play": "font/Slow Play.ttf"
+}
+
 def edit(x):
     return "".join(c for c in x if c not in "ÀÃéèêëàâôûùçîïô.;/:,?!\"'()[]<>|\\~@#$%^&*+=_ ").lower()
 
 def split_message(message):
     colors = list(color_map.keys())
+    fonts = list(font_map.keys())
+
     if message in colors:
-        return False, None, None, message
+        return "COLOR", None, None, message
+    
+    if message in fonts:
+        return "FONT", None, None, message
 
     parts = message.split(":")
     if len(parts) != 2:
@@ -42,6 +55,7 @@ def parole(song, artist):
                         return result
     except Exception as e:
         print(f"❌ Erreur lors de la récupération des paroles: {e}")
+        return None
     return None
 
 def get_album_cover(artist, song):
@@ -93,7 +107,7 @@ def get_album_cover(artist, song):
     print("❌ Aucune image d'album trouvée")
     return None, None
 
-def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
+def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), font_path="arial.ttf"):
     W, H = 1082, 1919
     base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
@@ -104,7 +118,11 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117)):
 
     base.paste(half, (x_pos, H // 2 - 270))
 
-    font = ImageFont.truetype("arial.ttf", 50)
+    try:
+        size = 45 if "Slow Play" in font_path else 50
+        font = ImageFont.truetype(font_path, size)
+    except:
+        font = ImageFont.truetype("arial.ttf", 50)
     wrapped_text = text
     bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=10)
     text_width = bbox[2] - bbox[0]
@@ -147,6 +165,18 @@ async def pallette(update, _):
         input_field_placeholder="Crée ton tiktok !!"
     )
     await update.message.reply_text("Choisis ta couleur :", reply_markup=clavier)
+
+async def font_palette(update, _):
+    boutons = [
+        [KeyboardButton("Arial"), KeyboardButton("Angel Wish"), KeyboardButton("Slow Play")]
+    ]
+    clavier = ReplyKeyboardMarkup(
+        keyboard=boutons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Choisis ta police !!"
+    )
+    await update.message.reply_text("Choisis ta police :", reply_markup=clavier)
 
 async def send_lyrics(update, context, index):
     lines = context.user_data.get("lyrics", [])
@@ -205,6 +235,7 @@ async def button_handler(update, context):
 
         user_id = query.from_user.id
         bg_color = user_colors.get(user_id, (11, 38, 117))
+        font_path = user_fonts.get(user_id, "arial.ttf")
         titre = context.user_data.get("titre")
         artist = context.user_data.get("artist")
         song = context.user_data.get("song")
@@ -215,8 +246,8 @@ async def button_handler(update, context):
             return
 
         try:
-            create_image(text, album_image, "img2.jpg", side='left', bg_color=bg_color)
-            create_image(song, album_image, "img1.jpg", side='right', bg_color=bg_color)
+            create_image(text, album_image, "img2.jpg", side='left', bg_color=bg_color, font_path=font_path)
+            create_image(song, album_image, "img1.jpg", side='right', bg_color=bg_color, font_path="arial.ttf")
 
             with open("img1.jpg", "rb") as img1:
                 await query.message.reply_photo(photo=img1, read_timeout=300, write_timeout=300, connect_timeout=300)
@@ -226,7 +257,7 @@ async def button_handler(update, context):
             os.remove("img1.jpg")
             os.remove("img2.jpg")
             
-            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #fyp #pourtoi #{song} #{artist}")
+            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #fyp #pourtoi #{titre} #{artist}")
         except Exception as e:
             print(f"❌ Erreur création/envoi images: {e}")
             await query.message.reply_text("❌ Erreur lors de la création des images")
@@ -245,9 +276,14 @@ async def echo(update, context):
         await update.message.reply_text(choose_line)
         return
 
-    if choose_line is False:
+    if choose_line == "COLOR":
         user_colors[user_id] = color_map.get(song)
         await update.message.reply_text(f"🎨 Tu as choisi la couleur {song} !")
+        return
+
+    if choose_line == "FONT":
+        user_fonts[user_id] = font_map.get(song)
+        await update.message.reply_text(f"🔤 Tu as choisi la police {song} !")
         return
 
     all_lines = parole(titre, artist)
@@ -255,6 +291,7 @@ async def echo(update, context):
     log_attempt(first_name, user_id, message, result, color_name)
 
     if not result:
+        await update.message.reply_text(f"❌ Paroles non trouvées pour {artist} - {song}. Vérifie l'orthographe ou essaie un autre titre.")
         return
 
     context.user_data["lyrics"] = all_lines
