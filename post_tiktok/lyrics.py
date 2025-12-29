@@ -1,7 +1,7 @@
-import os, textwrap, requests, urllib.parse, datetime
+import os, textwrap, requests, urllib.parse, datetime, random
 
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageChops
 from bs4 import BeautifulSoup
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
@@ -10,7 +10,7 @@ user_fonts = {}
 
 color_map = {
     "🔵 Bleu": (11, 38, 117),
-    "🔴 Rouge": (179, 38, 30),
+    "⚫ Metal": (15, 15, 15),
     "⚪ blanc": (255, 255, 255),
     "🟣 Violet": (120, 81, 169)
 }
@@ -107,10 +107,50 @@ def get_album_cover(artist, song):
     print("❌ Aucune image d'album trouvée")
     return None, None
 
+def add_lightning(draw, width, height):
+    for _ in range(random.randint(1, 3)):
+        x = random.randint(0, width)
+        y = 0
+        points = [(x, y)]
+        while y < height:
+            x += random.randint(-50, 50)
+            y += random.randint(20, 100)
+            points.append((x, y))
+        draw.line(points, fill="white", width=random.randint(3, 8))
+
+def add_purple_rain(draw, width, height):
+    for _ in range(150):
+        x = random.randint(0, width)
+        y = random.randint(0, height)
+        length = random.randint(30, 80)
+        draw.line([(x, y), (x, y + length)], fill=(120, 81, 169), width=3)
+
+def apply_glitch(base):
+    width, height = base.size
+    r, g, b = base.split()
+    r = ImageChops.offset(r, random.randint(-10, 10), 0)
+    b = ImageChops.offset(b, random.randint(-10, 10), 0)
+    base = Image.merge("RGB", (r, g, b))
+    
+    for _ in range(random.randint(5, 10)):
+        y = random.randint(0, height - 50)
+        h = random.randint(20, 100)
+        x_shift = random.randint(-50, 50)
+        box = (0, y, width, y + h)
+        region = base.crop(box)
+        base.paste(region, (x_shift, y))
+    return base
+
 def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), font_path="arial.ttf"):
     W, H = 1082, 1919
     base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
+
+    is_metal = bg_color == (15, 15, 15)
+    if is_metal:
+        add_lightning(draw, W, H)
+        add_purple_rain(draw, W, H)
+
     album_resized = album_image.resize((600, 600), Image.LANCZOS)
 
     half = album_resized.crop((0, 0, 302, 600)) if side == 'right' else album_resized.crop((300, 0, 600, 600))
@@ -122,7 +162,7 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), 
         size = 45 if "Slow Play" in font_path else 50
         font = ImageFont.truetype(font_path, size)
     except:
-        font = ImageFont.truetype("arial.ttf", 50)
+        font = ImageFont.truetype(font_path, 60)
     wrapped_text = text
     bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=10)
     text_width = bbox[2] - bbox[0]
@@ -137,6 +177,9 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), 
                 draw.multiline_text((text_x + dx, text_y + dy), wrapped_text, font=font, fill="black", spacing=10)
 
     draw.multiline_text((text_x, text_y), wrapped_text, font=font, fill="black" if bg_color == (255, 255, 255) else "white", spacing=10)
+
+    if is_metal:
+        base = apply_glitch(base)
 
     base.save(file)
 
@@ -155,7 +198,7 @@ def log_attempt(first_name, user_id, message, result, color):
     
 async def pallette(update, _):
     boutons = [
-        [KeyboardButton("🔵 Bleu"), KeyboardButton("🔴 Rouge")],
+        [KeyboardButton("🔵 Bleu"), KeyboardButton("⚫ Metal")],
         [KeyboardButton("⚪ blanc"), KeyboardButton("🟣 Violet")]
     ]
     clavier = ReplyKeyboardMarkup(

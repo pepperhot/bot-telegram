@@ -1,7 +1,7 @@
 import os
 
 from dotenv import load_dotenv
-from post_tiktok.lyrics import echo, button_handler, pallette, font_palette
+from post_tiktok.lyrics import echo, button_handler, pallette
 from post_tiktok.karaoke import echo_karaoke, button_handler_karaoke
 from post_tiktok.comande import start
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
@@ -38,7 +38,6 @@ def main():
     # --- Handlers ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("pallette", pallette))
-    application.add_handler(CommandHandler("font", font_palette))
     application.add_handler(CommandHandler("karaoke", karaoke_cmd))
     application.add_handler(CommandHandler("lyrics", lyrics_cmd))
     application.add_handler(CallbackQueryHandler(callback_router))
