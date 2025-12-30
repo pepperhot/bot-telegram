@@ -1,4 +1,4 @@
-import os, textwrap, requests, urllib.parse, datetime, random
+import os, textwrap, requests, urllib.parse, datetime, random, math
 
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageChops
@@ -12,7 +12,7 @@ color_map = {
     "🔵 Bleu": (11, 38, 117),
     "⚫ Metal": (15, 15, 15),
     "⚪ blanc": (255, 255, 255),
-    "🟣 Violet": (120, 81, 169)
+    "🏖️ Plage": (255, 165, 0)
 }
 
 font_map = {
@@ -107,6 +107,28 @@ def get_album_cover(artist, song):
     print("❌ Aucune image d'album trouvée")
     return None, None
 
+def add_sun(draw, width, height, side):
+    if side == 'right':
+        x, y = width - 150, 200
+        r = 80
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 0))
+        
+        for _ in range(12):
+            angle = random.uniform(0, 2 * math.pi)
+            length = random.randint(100, 200)
+            end_x = x + length * math.cos(angle)
+            end_y = y + length * math.sin(angle)
+            draw.line([(x, y), (end_x, end_y)], fill=(255, 255, 0), width=5)
+    else:
+        return
+
+def add_birds(draw, width, height):
+    for _ in range(random.randint(10, 15)):
+        x = random.randint(50, width - 50)
+        y = random.randint(50, height // 3)
+        size = random.randint(15, 30)
+        draw.line([(x, y), (x + size // 2, y + size // 2), (x + size, y)], fill="black", width=3)
+
 def add_lightning(draw, width, height):
     for _ in range(random.randint(1, 3)):
         x = random.randint(0, width)
@@ -147,9 +169,15 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), 
     draw = ImageDraw.Draw(base)
 
     is_metal = bg_color == (15, 15, 15)
+    is_plage = bg_color == (255, 165, 0)
+
     if is_metal:
         add_lightning(draw, W, H)
         add_purple_rain(draw, W, H)
+
+    if is_plage:
+        add_sun(draw, W, H, side)
+        add_birds(draw, W, H)
 
     album_resized = album_image.resize((600, 600), Image.LANCZOS)
 
@@ -199,7 +227,7 @@ def log_attempt(first_name, user_id, message, result, color):
 async def pallette(update, _):
     boutons = [
         [KeyboardButton("🔵 Bleu"), KeyboardButton("⚫ Metal")],
-        [KeyboardButton("⚪ blanc"), KeyboardButton("🟣 Violet")]
+        [KeyboardButton("⚪ blanc"), KeyboardButton("🏖️ Plage")]
     ]
     clavier = ReplyKeyboardMarkup(
         keyboard=boutons,
