@@ -1,4 +1,5 @@
-import os, textwrap, requests, urllib.parse, datetime, random, math
+import os, textwrap, requests, urllib.parse, datetime, random, math, asyncio
+from functools import partial
 
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageChops
@@ -7,6 +8,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 
 user_colors = {}
 user_fonts = {}
+
+# Pre-calculate translation table for edit function
+REMOVE_CHARS = "ÀÃéèêëàâôûùçîïô.;/:,?!\"'()[]<>|\\~@#$%^&*+=_ "
+TRANSLATION_TABLE = str.maketrans('', '', REMOVE_CHARS)
 
 color_map = {
     "🔵 Bleu": (11, 38, 117),
@@ -21,8 +26,12 @@ font_map = {
     "Slow Play": "font/Slow Play.ttf"
 }
 
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+
 def edit(x):
-    return "".join(c for c in x if c not in "ÀÃéèêëàâôûùçîïô.;/:,?!\"'()[]<>|\\~@#$%^&*+=_ ").lower()
+    return x.translate(TRANSLATION_TABLE).lower()
 
 def split_message(message):
     colors = list(color_map.keys())
@@ -39,10 +48,10 @@ def split_message(message):
         return "Erreur, format attendu : artiste:titre", None, None, None
 
     artist, song = parts[0], parts[1]
-    return True, edit(song), edit(artist), song
+    return True, edit(song), artist, song
 
 def parole(song, artist):
-    url = f'https://www.azlyrics.com/lyrics/{artist}/{song}.html'
+    url = f'https://www.azlyrics.com/lyrics/{edit(artist)}/{song}.html'
     try:
         response = requests.get(url)
         response.encoding = 'utf-8'
@@ -59,6 +68,7 @@ def parole(song, artist):
     return None
 
 def get_album_cover(artist, song):
+    artist = edit(artist)
     query = f"{artist} {song}"
 
     # --------------iTunes--------------
@@ -163,7 +173,17 @@ def apply_glitch(base):
         base.paste(region, (x_shift, y))
     return base
 
-def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), font_path="arial.ttf"):
+font_cache = {}
+def get_cached_font(font_path, size):
+    key = (font_path, size)
+    if key not in font_cache:
+        try:
+            font_cache[key] = ImageFont.truetype(font_path, size)
+        except:
+            font_cache[key] = ImageFont.truetype(font_path, 60)
+    return font_cache[key]
+
+def create_image(text, album_image, side='right', bg_color=(11, 38, 117), font_path="arial.ttf"):
     W, H = 1082, 1919
     base = Image.new("RGB", (W, H), color=bg_color)
     draw = ImageDraw.Draw(base)
@@ -188,9 +208,9 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), 
 
     try:
         size = 45 if "Slow Play" in font_path else 50
-        font = ImageFont.truetype(font_path, size)
+        font = get_cached_font(font_path, size)
     except:
-        font = ImageFont.truetype(font_path, 60)
+        font = get_cached_font(font_path, 60)
     wrapped_text = text
     bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=10)
     text_width = bbox[2] - bbox[0]
@@ -209,7 +229,10 @@ def create_image(text, album_image, file, side='right', bg_color=(11, 38, 117), 
     if is_metal:
         base = apply_glitch(base)
 
-    base.save(file)
+    bio = BytesIO()
+    base.save(bio, 'JPEG')
+    bio.seek(0)
+    return bio
 
 def log_attempt(first_name, user_id, message, result, color):
     now = datetime.datetime.now().strftime("%H:%M:%S")
@@ -217,11 +240,6 @@ def log_attempt(first_name, user_id, message, result, color):
     print(f"   ↪️ Message : {message}")
     print(f"   🎨 Couleur : {color}")
     print(f"   {"✅" if result else "❌"} Résultat : {'Succès' if result else 'Échec'}")
-    if result:
-        _, titre, artist, _ = split_message(message)
-        _, url = get_album_cover(titre, artist)
-        if url:
-            print(url)
     print(50 * "-")
     
 async def pallette(update, _):
@@ -310,25 +328,20 @@ async def button_handler(update, context):
         titre = context.user_data.get("titre")
         artist = context.user_data.get("artist")
         song = context.user_data.get("song")
-        album_image, _ = get_album_cover(titre, artist)
+        album_image, _ = await run_blocking(get_album_cover, titre, artist)
 
         if album_image is None:
             await query.message.reply_text("❌ Erreur lors de la récupération de l'image.")
             return
 
         try:
-            create_image(text, album_image, "img2.jpg", side='left', bg_color=bg_color, font_path=font_path)
-            create_image(song, album_image, "img1.jpg", side='right', bg_color=bg_color, font_path="arial.ttf")
+            img2_bio = await run_blocking(create_image, text, album_image, side='left', bg_color=bg_color, font_path=font_path)
+            img1_bio = await run_blocking(create_image, song, album_image, side='right', bg_color=bg_color, font_path="arial.ttf")
 
-            with open("img1.jpg", "rb") as img1:
-                await query.message.reply_photo(photo=img1, read_timeout=300, write_timeout=300, connect_timeout=300)
-            with open("img2.jpg", "rb") as img2:
-                await query.message.reply_photo(photo=img2, read_timeout=300, write_timeout=300, connect_timeout=300)
-
-            os.remove("img1.jpg")
-            os.remove("img2.jpg")
+            await query.message.reply_photo(photo=img1_bio, read_timeout=300, write_timeout=300, connect_timeout=300)
+            await query.message.reply_photo(photo=img2_bio, read_timeout=300, write_timeout=300, connect_timeout=300)
             
-            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #fyp #pourtoi #{titre} #{artist}")
+            await query.message.reply_text(f"{song} || {artist}\n#lyrics_songs #fyp #pourtoi #{edit(song)} #{edit(artist)}")
         except Exception as e:
             print(f"❌ Erreur création/envoi images: {e}")
             await query.message.reply_text("❌ Erreur lors de la création des images")
@@ -357,7 +370,7 @@ async def echo(update, context):
         await update.message.reply_text(f"🔤 Tu as choisi la police {song} !")
         return
 
-    all_lines = parole(titre, artist)
+    all_lines = await run_blocking(parole, titre, artist)
     result = all_lines is not None
     log_attempt(first_name, user_id, message, result, color_name)
 
