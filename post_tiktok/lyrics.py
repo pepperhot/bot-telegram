@@ -93,21 +93,6 @@ def get_album_cover(artist, song):
     except Exception as e:
         print(f"❌ iTunes failed: {e}")
 
-    # --------------azlyrics--------------
-    if img is None:
-        try:
-            az_url = f"https://www.azlyrics.com/lyrics/{artist}/{song}.html"
-            response = requests.get(az_url, headers=_AZ_HEADERS, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            img_tag = soup.find('img', {'class': 'album-image'})
-            if img_tag and 'src' in img_tag.attrs:
-                img_url = "https://www.azlyrics.com/" + img_tag['src']
-                img_data = requests.get(img_url).content
-                img, label = Image.open(BytesIO(img_data)), f"   azlyrics Image: {img_url}"
-        except Exception as e:
-            print(f"❌ AZLyrics failed: {e}")
-
     # --------------Google--------------
     if img is None:
         try:
@@ -342,7 +327,7 @@ async def button_handler(update, context):
         titre = context.user_data.get("titre")
         artist = context.user_data.get("artist")
         song = context.user_data.get("song")
-        album_image, _ = await run_blocking(get_album_cover, titre, artist)
+        album_image, _ = await run_blocking(get_album_cover, artist, titre)
 
         if album_image is None:
             await query.message.reply_text("❌ Erreur lors de la récupération de l'image.")
