@@ -50,10 +50,14 @@ def split_message(message):
     artist, song = parts[0], parts[1]
     return True, edit(song), artist, song
 
+_AZ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+_album_cache: dict = {}
+
 def parole(song, artist):
     url = f'https://www.azlyrics.com/lyrics/{edit(artist)}/{song}.html'
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=_AZ_HEADERS, timeout=10)
         response.encoding = 'utf-8'
         if response.status_code == 200:
             for div in BeautifulSoup(response.text, 'html.parser').find_all("div"):
@@ -68,8 +72,13 @@ def parole(song, artist):
     return None
 
 def get_album_cover(artist, song):
+    cache_key = (edit(artist), edit(song))
+    if cache_key in _album_cache:
+        return _album_cache[cache_key], "cache"
     artist = edit(artist)
     query = f"{artist} {song}"
+
+    img, label = None, None
 
     # --------------iTunes--------------
     try:
@@ -80,42 +89,47 @@ def get_album_cover(artist, song):
         if data.get("resultCount", 0) > 0:
             img_url = data["results"][0]["artworkUrl100"].replace("100x100", "1200x1200")
             img_data = requests.get(img_url).content
-            return Image.open(BytesIO(img_data)), f"   iTunes Image: {img_url}"
+            img, label = Image.open(BytesIO(img_data)), f"   iTunes Image: {img_url}"
     except Exception as e:
         print(f"❌ iTunes failed: {e}")
 
     # --------------azlyrics--------------
-    try:
-        az_url = f"https://www.azlyrics.com/lyrics/{artist}/{song}.html"
-        response = requests.get(az_url)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        img_tag = soup.find('img', {'class': 'album-image'})
-        if img_tag and 'src' in img_tag.attrs:
-            img_url = "https://www.azlyrics.com/" + img_tag['src']
-            img_data = requests.get(img_url).content
-            return Image.open(BytesIO(img_data)), f"   azlyrics Image: {img_url}"
-    except Exception as e:
-        print(f"❌ AZLyrics failed: {e}")
+    if img is None:
+        try:
+            az_url = f"https://www.azlyrics.com/lyrics/{artist}/{song}.html"
+            response = requests.get(az_url, headers=_AZ_HEADERS, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            img_tag = soup.find('img', {'class': 'album-image'})
+            if img_tag and 'src' in img_tag.attrs:
+                img_url = "https://www.azlyrics.com/" + img_tag['src']
+                img_data = requests.get(img_url).content
+                img, label = Image.open(BytesIO(img_data)), f"   azlyrics Image: {img_url}"
+        except Exception as e:
+            print(f"❌ AZLyrics failed: {e}")
 
     # --------------Google--------------
-    try:
-        search_query = urllib.parse.quote(f"{artist} {song} album cover")
-        google_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(google_url, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        img_tags = soup.find_all("img")
-        if len(img_tags) > 1:
-            img_src = img_tags[1].get("src")
-            if img_src and img_src.startswith("http"):
-                return Image.open(BytesIO(requests.get(img_src).content)), f"   Google Image: {img_src}"
-    except Exception as e:
-        print(f"❌ Google Images failed: {e}")
-    
-    print("❌ Aucune image d'album trouvée")
-    return None, None
+    if img is None:
+        try:
+            search_query = urllib.parse.quote(f"{artist} {song} album cover")
+            google_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
+            response = requests.get(google_url, headers=_AZ_HEADERS)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            img_tags = soup.find_all("img")
+            if len(img_tags) > 1:
+                img_src = img_tags[1].get("src")
+                if img_src and img_src.startswith("http"):
+                    img, label = Image.open(BytesIO(requests.get(img_src).content)), f"   Google Image: {img_src}"
+        except Exception as e:
+            print(f"❌ Google Images failed: {e}")
+
+    if img is None:
+        print("❌ Aucune image d'album trouvée")
+        return None, None
+
+    _album_cache[cache_key] = img
+    return img, label
 
 def add_sun(draw, width, height, side):
     if side == 'right':
@@ -320,7 +334,7 @@ async def button_handler(update, context):
             await query.message.reply_text("Erreur : aucun bloc de paroles à cet index.")
             return
         
-        text = text = "\n".join(line for sublist in block for line in sublist)
+        text = "\n".join(line for sublist in block for line in sublist)
 
         user_id = query.from_user.id
         bg_color = user_colors.get(user_id, (11, 38, 117))
@@ -335,8 +349,10 @@ async def button_handler(update, context):
             return
 
         try:
-            img2_bio = await run_blocking(create_image, text, album_image, side='left', bg_color=bg_color, font_path=font_path)
-            img1_bio = await run_blocking(create_image, song, album_image, side='right', bg_color=bg_color, font_path="arial.ttf")
+            img2_bio, img1_bio = await asyncio.gather(
+                run_blocking(create_image, text, album_image, side='left', bg_color=bg_color, font_path=font_path),
+                run_blocking(create_image, song, album_image, side='right', bg_color=bg_color, font_path="arial.ttf")
+            )
 
             await query.message.reply_photo(photo=img1_bio, read_timeout=300, write_timeout=300, connect_timeout=300)
             await query.message.reply_photo(photo=img2_bio, read_timeout=300, write_timeout=300, connect_timeout=300)

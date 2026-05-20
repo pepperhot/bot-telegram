@@ -18,7 +18,6 @@ FOLDER_PATH = os.getenv("FOLDER_PATH", ".")
 
 warnings.filterwarnings("ignore")
 logging.getLogger("ctranslate2").setLevel(logging.ERROR)
-language = None
 
 # ── Barre de progression Telegram ──────────────────────────────────────────
 
@@ -27,32 +26,65 @@ def _make_bar(pct: float, width: int = 18) -> str:
     return "▓" * n + "░" * (width - n)
 
 class _Prog:
-    __slots__ = ("pct", "step", "done")
+    __slots__ = ("pct", "step", "done", "t_start", "frame_cur", "frame_tot", "lyrics_source")
     def __init__(self):
-        self.pct  = 0.0
-        self.step = "Démarrage..."
-        self.done = False
+        self.pct           = 0.0
+        self.step          = "Démarrage..."
+        self.done          = False
+        self.t_start       = time.time()
+        self.frame_cur     = 0
+        self.frame_tot     = 0
+        self.lyrics_source = "whisper"
+
+def _format_status(prog: "_Prog") -> str:
+    elapsed = time.time() - prog.t_start
+    mins, secs = divmod(int(elapsed), 60)
+    time_str = f"{mins:02d}:{secs:02d}" if mins else f"{secs}s"
+    bar = _make_bar(prog.pct)
+    return f"[{bar}] ⏱ {time_str}\n{prog.step}"
 
 try:
     import proglog as _proglog
     class _MpLogger(_proglog.ProgressBarLogger):
-        """Logger moviepy qui transmet la progression frame par frame à _Prog."""
-        def __init__(self, prog: _Prog, s: float = 60, e: float = 99):
+        """Logger moviepy — transmet la progression frame par frame à _Prog."""
+        def __init__(self, prog: "_Prog", s: float = 60, e: float = 99):
             super().__init__()
             self._p, self._s, self._e = prog, s, e
         def bars_callback(self, bar, attr, value, old_value=None):
-            if bar == "chunk" and attr == "index":
-                total = self.bars.get("chunk", {}).get("total", 1) or 1
-                self._p.pct  = self._s + min(1.0, value / total) * (self._e - self._s)
-                self._p.step = f"🎞 Encodage : {value}/{total} frames"
+            if bar != "chunk":
+                return
+            if attr == "total":
+                self._p.frame_tot = value or 1
+            elif attr == "index":
+                self._p.frame_cur = value
+                tot = self._p.frame_tot or 1
+                self._p.pct  = self._s + min(1.0, value / tot) * (self._e - self._s)
+                self._p.step = f"🎞 Encodage : {value}/{tot} frames"
     _HAS_PROGLOG = True
 except ImportError:
     _MpLogger = None
     _HAS_PROGLOG = False
 
+async def _show_duration_picker(message):
+    keyboard = [
+        [
+            InlineKeyboardButton("⏱ 15s", callback_data="kdur:15"),
+            InlineKeyboardButton("⏱ 30s", callback_data="kdur:30"),
+            InlineKeyboardButton("⏱ 60s", callback_data="kdur:60"),
+        ],
+        [
+            InlineKeyboardButton("⏱ 90s", callback_data="kdur:90"),
+            InlineKeyboardButton("🎵 Chanson complète", callback_data="kdur:0"),
+        ]
+    ]
+    await message.reply_text(
+        "⏱ Choisir la durée de la vidéo karaoke :",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 def download_video(url, folder, filename):
     os.makedirs(folder, exist_ok=True)
-    
+
     class MyLogger:
         def debug(self, msg): pass
         def warning(self, msg): pass
@@ -63,7 +95,7 @@ def download_video(url, folder, filename):
             print(f"📥 {d['filename']} {d['_percent_str']} à {d['_speed_str']} - ETA {d['_eta_str']}", end='\r')
 
     output_path = os.path.join(folder, f"{filename}.%(ext)s")
-    
+
     ydl_opts = {
         'outtmpl': output_path,
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
@@ -83,7 +115,7 @@ def download_video(url, folder, filename):
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    
+
     video_path = os.path.join(folder, f"{filename}.mp4")
     if os.path.exists(video_path):
         return video_path
@@ -170,7 +202,7 @@ def _align_to_whisper(whisper_words, lyrics_lines):
             result.append((line, start, dur))
     return result
 
-def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, progress=None):
+def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, lang=None, progress=None):
     def _upd(pct, step):
         if progress:
             progress.pct  = pct
@@ -180,7 +212,7 @@ def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, progress=
         model = WhisperModel("small", device="cpu", compute_type="int8")
         _upd(40, "🎤 Transcription audio en cours...")
         segments, _ = model.transcribe(
-            video_file, word_timestamps=True, language=language, beam_size=5, best_of=5
+            video_file, word_timestamps=True, language=lang, beam_size=2, best_of=2
         )
 
         all_words = []
@@ -200,6 +232,8 @@ def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, progress=
                         with open(output_txt, "w", encoding="utf-8") as f:
                             for text, start, duration in aligned:
                                 f.write(f"{text}\n{start:.3f}/{duration:.3f}\n\n")
+                        if progress:
+                            progress.lyrics_source = "azlyrics"
                         _upd(62, f"✅ {len(aligned)} lignes alignées sur AZLyrics")
                         print(f"✅ Paroles réelles alignées : {len(aligned)} lignes")
                         return True
@@ -233,7 +267,7 @@ def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, progress=
 def lire_txt(filepath):
     if not os.path.exists(filepath):
         return []
-    
+
     lignes = []
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -241,7 +275,7 @@ def lire_txt(filepath):
         blocs = contenu.split("\n\n")
         for bloc in blocs:
             parts = bloc.split("\n")
-            if len(parts) != 2: 
+            if len(parts) != 2:
                 continue
             try:
                 texte = parts[0]
@@ -261,7 +295,7 @@ def text_with_shadow(text):
             font = ImageFont.truetype("arial.ttf", 50)
         except:
             font = ImageFont.load_default()
-    
+
     tmp_img = Image.new("RGBA", (1, 1))
     draw = ImageDraw.Draw(tmp_img)
     bbox = draw.textbbox((0, 0), text, font=font, spacing=10)
@@ -289,7 +323,7 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duratio
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Vidéo source introuvable : {video_path}")
-    
+
     if not os.path.exists(path_txt):
         raise FileNotFoundError(f"Fichier lyrics introuvable : {path_txt}")
 
@@ -380,20 +414,21 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duratio
             output_karaoke,
             codec="libx264",
             audio_codec="aac",
-            preset="medium",
+            preset="fast",
             bitrate="2000k",
             fps=24,
             temp_audiofile=None,
             remove_temp=True,
             verbose=False,
+            ffmpeg_params=["-threads", "4"],
             logger=mp_logger or None
         )
         _upd(99, "✅ Encodage terminé !")
-        
+
         final.close()
         video_segment.close()
         base_clip.close()
-        
+
         time.sleep(2)
 
         if os.path.exists(output_karaoke):
@@ -405,7 +440,7 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duratio
                 return False
         else:
             return False
-            
+
     except Exception as e:
         try:
             if 'final' in locals():
@@ -418,7 +453,7 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duratio
             pass
         raise
 
-def process_song(artist, song, url, progress=None):
+def process_song(artist, song, url, lang=None, progress=None):
     def _upd(pct, step):
         if progress:
             progress.pct  = pct
@@ -451,7 +486,7 @@ def process_song(artist, song, url, progress=None):
 
     if not os.path.exists(lyrics_path_txt):
         _upd(35, "🎤 Transcription Whisper...")
-        success = generer_lyrics_txt(video_path, lyrics_path_txt, artist=artist, song=song, progress=progress)
+        success = generer_lyrics_txt(video_path, lyrics_path_txt, artist=artist, song=song, lang=lang, progress=progress)
         if not success:
             return None
     else:
@@ -464,7 +499,7 @@ def log_attempt(first_name, user_id, message, result, color):
     print(f"[{now}] 🔍 {first_name} ({user_id})")
     print(f"   ↪️ Message : {message}")
     print(f"   🎨 Couleur : {color}")
-    print(f"   {"✅" if result else "❌"} Résultat : {'Succès' if result else 'Échec'}")
+    print(f"   {'✅' if result else '❌'} Résultat : {'Succès' if result else 'Échec'}")
     print(50 * "-")
 
 async def send_lyrics_karaoke(update, context, index):
@@ -476,15 +511,15 @@ async def send_lyrics_karaoke(update, context, index):
     keyboard = []
     nav_buttons = []
 
-    if index > 0: 
+    if index > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Retour", callback_data=f"back:{index}"))
 
-    if index + 2 < len(lines): 
+    if index + 2 < len(lines):
         nav_buttons.append(InlineKeyboardButton("▶️ Suite", callback_data=f"next:{index}"))
 
     keyboard.append([InlineKeyboardButton("✅ Valider ce bloc", callback_data=f"select:{index}")])
 
-    if nav_buttons: 
+    if nav_buttons:
         keyboard.append(nav_buttons)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -493,6 +528,101 @@ async def send_lyrics_karaoke(update, context, index):
     else:
         await update.message.reply_text(text=text, reply_markup=reply_markup)
 
+async def _run_karaoke_generation(update, context, line_idx, duration_limit):
+    """Lance la génération karaoke avec barre de progression et envoie la vidéo."""
+    query = update.callback_query
+    artist = context.user_data.get("artist", "")
+    song   = context.user_data.get("song", "")
+
+    safe_filename  = f"{artist} - {song}".replace("/", "-").replace("\\", "-")
+    video_path     = os.path.join(FOLDER_PATH, f"{safe_filename}.mp4")
+    output_karaoke = os.path.join(FOLDER_PATH, f"{safe_filename}_karaoke.mp4")
+    lyrics_path    = os.path.join(FOLDER_PATH, f"{safe_filename}.txt")
+
+    prog      = _Prog()
+    dur_label = f"{duration_limit}s" if duration_limit else "chanson complète"
+    status    = await query.message.reply_text(
+        f"🎬 Génération ({dur_label})...\n{_format_status(prog)}"
+    )
+
+    async def _upd_loop():
+        while not prog.done:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=status.message_id,
+                    text=f"🎬 Génération ({dur_label})...\n{_format_status(prog)}"
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+
+    upd  = asyncio.create_task(_upd_loop())
+    loop = asyncio.get_running_loop()
+
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: create_karaoke_video(
+                video_path, line_idx, output_karaoke, lyrics_path,
+                duration_limit=duration_limit, progress=prog
+            )
+        )
+    except Exception as e:
+        prog.done = True
+        upd.cancel()
+        print(f"❌ Erreur création vidéo karaoke: {e}")
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id, message_id=status.message_id,
+            text=f"❌ Erreur création vidéo : {str(e)[:100]}"
+        )
+        return
+    finally:
+        prog.done = True
+        upd.cancel()
+
+    src_label = "🎵 AZLyrics" if prog.lyrics_source == "azlyrics" else "🎤 Whisper"
+    await context.bot.edit_message_text(
+        chat_id=update.effective_chat.id, message_id=status.message_id,
+        text=f"✅ Vidéo prête ! Envoi en cours...\nParoles : {src_label}"
+    )
+
+    if not os.path.exists(output_karaoke):
+        await query.message.reply_text("❌ La vidéo n'a pas été générée correctement")
+        return
+
+    file_size = os.path.getsize(output_karaoke)
+    print(f"📹 Taille vidéo karaoke : {file_size / (1024*1024):.2f} MB")
+
+    if file_size > 50 * 1024 * 1024:
+        await query.message.reply_text("❌ Vidéo trop volumineuse pour Telegram (>50MB)")
+        return
+
+    try:
+        with open(output_karaoke, "rb") as f:
+            await context.bot.send_video(
+                chat_id=update.effective_chat.id,
+                video=f,
+                supports_streaming=True,
+                read_timeout=300,
+                write_timeout=300,
+                connect_timeout=300
+            )
+        print("✅ Vidéo karaoke envoyée avec succès")
+        await query.message.reply_text(
+            f"{song} || {artist}\n#karaoke #fyp #pourtoi #{song} #{artist}"
+        )
+        for path in [output_karaoke, lyrics_path, video_path]:
+            if os.path.exists(path):
+                os.remove(path)
+
+    except FileNotFoundError:
+        await query.message.reply_text("❌ Fichier vidéo introuvable")
+        print(f"❌ Fichier non trouvé : {output_karaoke}")
+
+    except Exception as e:
+        await query.message.reply_text(f"❌ Erreur envoi vidéo : {str(e)[:100]}")
+
 async def button_handler_karaoke(update, context):
     query = update.callback_query
     await query.answer()
@@ -500,97 +630,16 @@ async def button_handler_karaoke(update, context):
     idx = int(idx)
 
     if action == "next":
-        await send_lyrics_karaoke(update, context, idx+2)
+        await send_lyrics_karaoke(update, context, idx + 2)
     elif action == "back":
-        await send_lyrics_karaoke(update, context, max(0, idx-2))
+        await send_lyrics_karaoke(update, context, max(0, idx - 2))
     elif action == "select":
-        artist = context.user_data.get("artist", "")
-        song = context.user_data.get("song", "")
-        
-        safe_filename = f"{artist} - {song}".replace("/", "-").replace("\\", "-")
-        video_path = os.path.join(FOLDER_PATH, f"{safe_filename}.mp4")
-        output_karaoke = os.path.join(FOLDER_PATH, f"{safe_filename}_karaoke.mp4")
-        lyrics_path = os.path.join(FOLDER_PATH, f"{safe_filename}.txt")
-
-        prog = _Prog()
-        status = await update.callback_query.message.reply_text(
-            f"🎬 Génération vidéo...\n[{_make_bar(0)}]  0%\nPréparation..."
-        )
-
-        async def _upd_loop():
-            while not prog.done:
-                bar = _make_bar(prog.pct)
-                pct = int(prog.pct)
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=update.effective_chat.id,
-                        message_id=status.message_id,
-                        text=f"🎬 Génération vidéo...\n[{bar}] {pct}%\n{prog.step}"
-                    )
-                except Exception:
-                    pass
-                await asyncio.sleep(2)
-
-        upd = asyncio.create_task(_upd_loop())
-        loop = asyncio.get_running_loop()
-
-        try:
-            await loop.run_in_executor(
-                None,
-                lambda: create_karaoke_video(video_path, idx, output_karaoke, lyrics_path, progress=prog)
-            )
-        except Exception as e:
-            prog.done = True
-            upd.cancel()
-            print(f"❌ Erreur création vidéo karaoke: {e}")
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id, message_id=status.message_id,
-                text=f"❌ Erreur création vidéo : {str(e)[:100]}"
-            )
-            return
-        finally:
-            prog.done = True
-            upd.cancel()
-
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, message_id=status.message_id,
-            text="✅ Vidéo prête ! Envoi en cours..."
-        )
-
-        if not os.path.exists(output_karaoke):
-            await update.callback_query.message.reply_text("❌ La vidéo n'a pas été générée correctement")
-            return
-
-        file_size = os.path.getsize(output_karaoke)
-        print(f"📹 Taille vidéo karaoke : {file_size / (1024*1024):.2f} MB")
-
-        if file_size > 50 * 1024 * 1024:
-            await update.callback_query.message.reply_text("❌ Vidéo trop volumineuse pour Telegram (>50MB)")
-            return
-
-        try:
-            with open(output_karaoke, "rb") as f:
-                await context.bot.send_video(
-                    chat_id=update.effective_chat.id,
-                    video=f,
-                    supports_streaming=True,
-                    read_timeout=300,
-                    write_timeout=300,
-                    connect_timeout=300
-                )
-            print(f"✅ Vidéo karaoke envoyée avec succès")
-            await update.callback_query.message.reply_text(
-                f"{song} || {artist}\n#karaoke #fyp #pourtoi #{song} #{artist}"
-            )
-            for i in [output_karaoke, lyrics_path, video_path]:
-                os.remove(i) if os.path.exists(i) else None
-
-        except FileNotFoundError:
-            await update.callback_query.message.reply_text("❌ Fichier vidéo introuvable")
-            print(f"❌ Fichier non trouvé : {output_karaoke}")
-
-        except Exception as e:
-            await update.callback_query.message.reply_text(f"❌ Erreur envoi vidéo : {str(e)[:100]}")
+        context.user_data["pending_karaoke_idx"] = idx
+        await _show_duration_picker(query.message)
+    elif action == "kdur":
+        duration_limit = idx  # 0 = chanson complète
+        line_idx = context.user_data.get("pending_karaoke_idx", 0)
+        await _run_karaoke_generation(update, context, line_idx, duration_limit)
 
 async def echo_karaoke(update, context):
     user = update.message.from_user
@@ -602,19 +651,17 @@ async def echo_karaoke(update, context):
     log_attempt(first_name, user_id, message, result=True, color=None)
 
     async def _run_with_progress(fn, *args):
-        prog = _Prog()
+        prog   = _Prog()
         status = await update.message.reply_text(
-            f"⏳ Traitement en cours...\n[{_make_bar(0)}]  0%\nDémarrage..."
+            f"⏳ Traitement en cours...\n{_format_status(prog)}"
         )
         async def _upd_loop():
             while not prog.done:
-                bar  = _make_bar(prog.pct)
-                pct  = int(prog.pct)
                 try:
                     await context.bot.edit_message_text(
                         chat_id=update.effective_chat.id,
                         message_id=status.message_id,
-                        text=f"⏳ Traitement en cours...\n[{bar}] {pct}%\n{prog.step}"
+                        text=f"⏳ Traitement en cours...\n{_format_status(prog)}"
                     )
                 except Exception:
                     pass
@@ -625,11 +672,11 @@ async def echo_karaoke(update, context):
         finally:
             prog.done = True
             upd.cancel()
-        return result, status
+        return result, status, prog
 
     if message.startswith("https://www.youtube.com/watch?v="):
         try:
-            lyrics_path, status = await _run_with_progress(process_song, "Unknown", "Unknown", message)
+            lyrics_path, status, prog = await _run_with_progress(process_song, "Unknown", "Unknown", message)
             if not lyrics_path:
                 await context.bot.edit_message_text(
                     chat_id=update.effective_chat.id, message_id=status.message_id,
@@ -662,11 +709,12 @@ async def echo_karaoke(update, context):
         return
 
     try:
+        lang = context.user_data.get("language")
         if message[-2:] in ("fr", "en", "es", "it", "de"):
-            global language
-            language = message[-2:]
+            lang = message[-2:]
+            context.user_data["language"] = lang
             message = message[:-2].strip()
-            await update.message.reply_text(f"🌐 Langue définie sur : {language}")
+            await update.message.reply_text(f"🌐 Langue définie sur : {lang}")
 
         parts = message.split(":", 1)
         if len(parts) != 2:
@@ -681,26 +729,28 @@ async def echo_karaoke(update, context):
         context.user_data["artist"] = artist
         context.user_data["song"] = song
 
-        lyrics_path, status = await _run_with_progress(process_song, artist, song, None)
+        lyrics_path, status, prog = await _run_with_progress(process_song, artist, song, None, lang)
         if not lyrics_path:
             await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id, message_id=status.message_id,
                 text="❌ Impossible de traiter cette chanson"
             )
             return
+
+        src_label = "🎵 AZLyrics" if prog.lyrics_source == "azlyrics" else "🎤 Whisper"
         await context.bot.edit_message_text(
             chat_id=update.effective_chat.id, message_id=status.message_id,
-            text="✅ Prêt ! Sélectionne un bloc de paroles."
+            text=f"✅ Prêt ! Sélectionne un bloc de paroles.\nParoles : {src_label}"
         )
-            
+
         lines = lire_txt(lyrics_path)
         if not lines:
             await update.message.reply_text("❌ Aucune parole générée pour cette chanson")
             return
-            
+
         context.user_data["lyrics"] = lines
         await send_lyrics_karaoke(update, context, index=0)
-        
+
     except Exception as e:
         print(f"❌ Erreur echo_karaoke: {e}")
         await update.message.reply_text("❌ Erreur lors du traitement de la demande")
