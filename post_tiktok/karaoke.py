@@ -1,6 +1,9 @@
 import yt_dlp, warnings, logging, numpy, time, os, asyncio, datetime
 
 from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.LANCZOS
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
 from faster_whisper import WhisperModel
@@ -11,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 user_colors = {}
-FOLDER_PATH = r"C:\Users\Lucas\github\bot-telegram"
+FOLDER_PATH = os.getenv("FOLDER_PATH", ".")
 
 warnings.filterwarnings("ignore")
 logging.getLogger("ctranslate2").setLevel(logging.ERROR)
