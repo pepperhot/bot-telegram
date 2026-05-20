@@ -1,4 +1,4 @@
-import yt_dlp, warnings, logging, numpy, time, os, asyncio, datetime
+import yt_dlp, warnings, logging, numpy, time, os, asyncio, datetime, difflib, re
 
 from PIL import Image, ImageDraw, ImageFont
 from PIL import Image
@@ -58,33 +58,140 @@ def download_video(url, folder, filename):
     if os.path.exists(video_path):
         return video_path
 
-def generer_lyrics_txt(video_file, output_txt):
+def _normalize(w):
+    return re.sub(r"[^a-z0-9]", "", w.lower())
+
+def _flat_lyrics(raw_paroles):
+    """Convertit la sortie imbriquée de parole() en liste plate de lignes courtes."""
+    lines = []
+    for block in raw_paroles:
+        if isinstance(block, list):
+            lines.extend(s.strip() for s in block if s.strip())
+        elif str(block).strip():
+            lines.append(str(block).strip())
+    return lines
+
+def _align_to_whisper(whisper_words, lyrics_lines):
+    """
+    Aligne les vraies paroles (AZLyrics) sur les timestamps Whisper mot par mot.
+
+    whisper_words : liste de Word objects (faster-whisper) avec .word .start .end
+    lyrics_lines  : liste de strings (lignes de la chanson)
+
+    Retourne : [(line_text, start_time, duration), ...]
+    """
+    if not whisper_words or not lyrics_lines:
+        return []
+
+    lyric_words = []  # (word_str, line_idx)
+    for i, line in enumerate(lyrics_lines):
+        for w in line.split():
+            lyric_words.append((w, i))
+
+    if not lyric_words:
+        return []
+
+    w_seq = [_normalize(ww.word) for ww in whisper_words]
+    l_seq = [_normalize(lw[0]) for lw in lyric_words]
+
+    matcher = difflib.SequenceMatcher(None, w_seq, l_seq, autojunk=False)
+
+    # timing[lyric_word_idx] = (start, end) depuis Whisper
+    timing = {}
+    for a, b, size in matcher.get_matching_blocks():
+        for k in range(size):
+            timing[b + k] = (whisper_words[a + k].start, whisper_words[a + k].end)
+
+    # Agréger au niveau ligne
+    line_starts, line_ends = {}, {}
+    for li_idx, (_, line_idx) in enumerate(lyric_words):
+        if li_idx in timing:
+            s, e = timing[li_idx]
+            if line_idx not in line_starts:
+                line_starts[line_idx] = s
+            line_ends[line_idx] = e
+
+    # Interpoler les lignes sans timestamp
+    known = sorted(line_starts)
+    for i in range(len(lyrics_lines)):
+        if i not in line_starts:
+            prev = [k for k in known if k < i]
+            nxt  = [k for k in known if k > i]
+            if prev and nxt:
+                p, n = max(prev), min(nxt)
+                p_end    = line_ends.get(p, line_starts[p] + 2.0)
+                ratio    = (i - p) / (n - p)
+                line_starts[i] = p_end + ratio * (line_starts[n] - p_end)
+                line_ends[i]   = line_starts[i] + 2.0
+            elif prev:
+                p = max(prev)
+                line_starts[i] = line_ends.get(p, line_starts[p] + 2.0)
+                line_ends[i]   = line_starts[i] + 2.0
+            elif nxt:
+                n = min(nxt)
+                line_starts[i] = max(0.0, line_starts[n] - 2.0 * (n - i))
+                line_ends[i]   = line_starts[i] + 2.0
+
+    result = []
+    for i, line in enumerate(lyrics_lines):
+        if i in line_starts:
+            start = line_starts[i]
+            dur   = max(line_ends.get(i, start + 2.0) - start, 1.5)
+            result.append((line, start, dur))
+    return result
+
+def generer_lyrics_txt(video_file, output_txt, artist=None, song=None):
     try:
-        model = WhisperModel("base", device="cpu", compute_type="float32")
+        # "small" + int8 : même vitesse que "base" float32, bien meilleure précision
+        model = WhisperModel("small", device="cpu", compute_type="int8")
         segments, _ = model.transcribe(
             video_file, word_timestamps=True, language=language, beam_size=5, best_of=5
         )
 
+        # Collecter tous les mots avec leurs timestamps
+        all_words = []
+        for seg in segments:
+            if seg.words:
+                all_words.extend(seg.words)
+
+        # --- Tentative paroles réelles + alignement ---
+        if artist and song and artist != "Unknown" and song != "Unknown":
+            try:
+                from post_tiktok.lyrics import parole, edit as edit_word
+                raw = parole(edit_word(song), artist)
+                if raw:
+                    lyrics_lines = _flat_lyrics(raw)
+                    aligned = _align_to_whisper(all_words, lyrics_lines)
+                    if len(aligned) >= 3:
+                        with open(output_txt, "w", encoding="utf-8") as f:
+                            for text, start, duration in aligned:
+                                f.write(f"{text}\n{start:.3f}/{duration:.3f}\n\n")
+                        print(f"✅ Paroles réelles alignées : {len(aligned)} lignes")
+                        return True
+                    print("⚠️ Alignement insuffisant, fallback Whisper")
+            except Exception as e:
+                print(f"⚠️ Paroles réelles introuvables : {e}")
+
+        # --- Fallback : transcription Whisper brute ---
         with open(output_txt, "w", encoding="utf-8") as f:
-            for seg in segments:
-                mots = []
-                start_time = None
-                for word in seg.words:
-                    if start_time is None:
-                        start_time = word.start
-                    mots.append(word.word)
-                    end_time = word.end
-                    if len(mots) >= 6 or any(p in word.word for p in [",",".","!","?"]):
-                        duration = end_time - start_time
-                        f.write(f"{' '.join(mots)}\n{start_time:.3f}/{duration:.3f}\n\n")
-                        mots = []
-                        start_time = None
-                if mots and start_time is not None:
-                    duration = end_time - start_time
-                    f.write(f"{' '.join(mots)}\n{start_time:.3f}/{duration:.3f}\n")
-        
+            mots = []
+            start_time = None
+            end_time = 0
+            for word in all_words:
+                if start_time is None:
+                    start_time = word.start
+                mots.append(word.word)
+                end_time = word.end
+                if len(mots) >= 6 or any(p in word.word for p in [",", ".", "!", "?"]):
+                    f.write(f"{' '.join(mots)}\n{start_time:.3f}/{end_time - start_time:.3f}\n\n")
+                    mots = []
+                    start_time = None
+            if mots and start_time is not None:
+                f.write(f"{' '.join(mots)}\n{start_time:.3f}/{end_time - start_time:.3f}\n")
+
         return True
     except Exception as e:
+        print(f"❌ Whisper error: {e}")
         return False
 
 def lire_txt(filepath):
@@ -208,7 +315,7 @@ def create_karaoke_video(video_path, idx_line, output_karaoke, path_txt, duratio
                         
                         txt_clip = text_with_shadow(texte_court).set_start(
                             start - video_start
-                        ).set_duration(remaining).set_position(("center", "center"))
+                        ).set_duration(remaining).set_position(("center", 0.72), relative=True)
                         clips.append(txt_clip)
                     except Exception as e:
                         pass
@@ -283,7 +390,7 @@ def process_song(artist, song, url):
             return None
     
     if not os.path.exists(lyrics_path_txt):
-        success = generer_lyrics_txt(video_path, lyrics_path_txt)
+        success = generer_lyrics_txt(video_path, lyrics_path_txt, artist=artist, song=song)
         if not success:
             return None
     
