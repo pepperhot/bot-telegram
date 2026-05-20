@@ -224,8 +224,8 @@ def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, lang=None
         _upd(54, "🔤 Alignement des paroles...")
         if artist and song and artist != "Unknown" and song != "Unknown":
             try:
-                from post_tiktok.lyrics import parole, edit as edit_word
-                raw = parole(edit_word(song), artist)
+                from post_tiktok.lyrics import parole
+                raw = parole(song, artist)
                 if raw:
                     lyrics_lines = _flat_lyrics(raw)
                     aligned = _align_to_whisper(all_words, lyrics_lines)
@@ -234,13 +234,13 @@ def generer_lyrics_txt(video_file, output_txt, artist=None, song=None, lang=None
                             for text, start, duration in aligned:
                                 f.write(f"{text}\n{start:.3f}/{duration:.3f}\n\n")
                         if progress:
-                            progress.lyrics_source = "azlyrics"
-                        _upd(62, f"✅ {len(aligned)} lignes alignées sur AZLyrics")
+                            progress.lyrics_source = "lyrics.ovh"
+                        _upd(62, f"✅ {len(aligned)} lignes alignées via lyrics.ovh")
                         print(f"✅ Paroles réelles alignées : {len(aligned)} lignes")
                         return True
                     print("⚠️ Alignement insuffisant, fallback Whisper")
             except Exception as e:
-                print(f"⚠️ Paroles réelles introuvables : {e}")
+                print(f"⚠️ Paroles introuvables : {e}")
 
         _upd(56, "🎤 Génération paroles Whisper...")
         with open(output_txt, "w", encoding="utf-8") as f:
@@ -582,7 +582,7 @@ async def _run_karaoke_generation(update, context, line_idx, duration_limit):
         prog.done = True
         upd.cancel()
 
-    src_label = "🎵 AZLyrics" if prog.lyrics_source == "azlyrics" else "🎤 Whisper"
+    src_label = "🎵 lyrics.ovh" if prog.lyrics_source == "lyrics.ovh" else "🎤 Whisper"
     await context.bot.edit_message_text(
         chat_id=update.effective_chat.id, message_id=status.message_id,
         text=f"✅ Vidéo prête ! Envoi en cours...\nParoles : {src_label}"
@@ -738,7 +738,7 @@ async def echo_karaoke(update, context):
             )
             return
 
-        src_label = "🎵 AZLyrics" if prog.lyrics_source == "azlyrics" else "🎤 Whisper"
+        src_label = "🎵 lyrics.ovh" if prog.lyrics_source == "lyrics.ovh" else "🎤 Whisper"
         await context.bot.edit_message_text(
             chat_id=update.effective_chat.id, message_id=status.message_id,
             text=f"✅ Prêt ! Sélectionne un bloc de paroles.\nParoles : {src_label}"

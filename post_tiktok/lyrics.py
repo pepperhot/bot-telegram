@@ -55,21 +55,24 @@ _AZ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 _album_cache: dict = {}
 
 def parole(song, artist):
-    url = f'https://www.azlyrics.com/lyrics/{edit(artist)}/{song}.html'
     try:
-        response = requests.get(url, headers=_AZ_HEADERS, timeout=10)
-        response.encoding = 'utf-8'
+        url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(song)}"
+        response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            for div in BeautifulSoup(response.text, 'html.parser').find_all("div"):
-                if not div.get("class") and div.get_text(strip=True):
-                    lyrics_raw = div.get_text(separator='\n')
-                    if len(lyrics_raw.splitlines()) > 10:
-                        result = [textwrap.wrap(line, width=30)for line in [line for line in lyrics_raw.split('\n') if line and "(feat." not in line and "Submit Corrections" not in line and not (line.startswith('[') and line.endswith(']'))]]
-                        return result
+            lyrics_raw = response.json().get("lyrics", "")
+            if not lyrics_raw:
+                return None
+            result = [
+                textwrap.wrap(line, width=30)
+                for line in lyrics_raw.split('\n')
+                if line.strip()
+                and "(feat." not in line
+                and not (line.startswith('[') and line.endswith(']'))
+            ]
+            return result if result else None
     except Exception as e:
         print(f"❌ Erreur lors de la récupération des paroles: {e}")
         return None
-    return None
 
 def get_album_cover(artist, song):
     cache_key = (edit(artist), edit(song))
@@ -371,7 +374,7 @@ async def echo(update, context):
         await update.message.reply_text(f"🔤 Tu as choisi la police {song} !")
         return
 
-    all_lines = await run_blocking(parole, titre, artist)
+    all_lines = await run_blocking(parole, song, artist)
     result = all_lines is not None
     log_attempt(first_name, user_id, message, result, color_name)
 
