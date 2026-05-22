@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git branch *)",
+      "Bash(git reset *)",
+      "Bash(gh pr create --title 'karaoke: real lyrics alignment + better Whisper model' --body ' *)",
+      "PowerShell($env:GH_TOKEN)",
+      "PowerShell($env:GITHUB_TOKEN)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('post_tiktok/karaoke.py'\\).read\\(\\)\\); print\\('OK syntaxe'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('post_tiktok/karaoke.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK syntaxe'\\)\")",
+      "Bash(git checkout *)",
+      "Bash(git cherry-pick *)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

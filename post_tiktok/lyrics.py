@@ -1,4 +1,4 @@
-import os, textwrap, requests, urllib.parse, datetime, random, math, asyncio
+import textwrap, requests, urllib.parse, datetime, random, math, asyncio, re, unicodedata
 from functools import partial
 
 from io import BytesIO
@@ -53,26 +53,120 @@ def split_message(message):
 _AZ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 _album_cache: dict = {}
+_ALBUM_CACHE_MAX = 50
+
+_GENIUS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+def _norm(s):
+    s = unicodedata.normalize("NFD", s.lower())
+    return re.sub(r"[^a-z0-9]", "", "".join(c for c in s if unicodedata.category(c) != "Mn"))
+
+def _genius_get_lyrics(artist, song):
+    try:
+        q = urllib.parse.quote(f"{artist} {song}")
+        r = requests.get(
+            f"https://genius.com/api/search/multi?per_page=5&q={q}",
+            headers=_GENIUS_HEADERS, timeout=10
+        )
+        if r.status_code != 200:
+            return None
+
+        song_norm = _norm(song)
+        url = None
+        for section in r.json().get("response", {}).get("sections", []):
+            for hit in section.get("hits", []):
+                if hit.get("type") != "song":
+                    continue
+                res = hit.get("result", {})
+                title_norm = _norm(res.get("title", ""))
+                if song_norm in title_norm or title_norm in song_norm:
+                    url = res.get("url")
+                    break
+            if url:
+                break
+
+        if not url:
+            return None
+
+        r2 = requests.get(url, headers=_GENIUS_HEADERS, timeout=10)
+        soup = BeautifulSoup(r2.text, "html.parser")
+        containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
+        if not containers:
+            return None
+
+        lines = []
+        for c in containers:
+            for br in c.find_all("br"):
+                br.replace_with("\n")
+            text = c.get_text(separator="")
+            text = re.sub(r"^.*?\[Paroles de [^\]]+\]\n*", "", text, flags=re.DOTALL)
+            text = re.sub(r"^.*? Lyrics\n*", "", text, flags=re.DOTALL)
+            for line in text.split("\n"):
+                line = re.sub(r'\([^)]*\)', '', line).strip()
+                if not line or (line.startswith("[") and line.endswith("]")):
+                    continue
+                lines.append(line)
+
+        return lines if lines else None
+    except Exception as e:
+        print(f"❌ Genius fallback error: {e}")
+        return None
+
+def _azlyrics_get_lyrics(song, artist):
+    url = f"https://www.azlyrics.com/lyrics/{edit(artist)}/{song}.html"
+    try:
+        response = requests.get(url, headers=_AZ_HEADERS, timeout=10)
+        response.encoding = "utf-8"
+        if response.status_code == 200:
+            for div in BeautifulSoup(response.text, "html.parser").find_all("div"):
+                if not div.get("class") and div.get_text(strip=True):
+                    lyrics_raw = div.get_text(separator="\n")
+                    if len(lyrics_raw.splitlines()) > 10:
+                        lines = []
+                        for line in lyrics_raw.split("\n"):
+                            line = re.sub(r'\([^)]*\)', '', line).strip()
+                            if (line
+                                and "Submit Corrections" not in line
+                                and not (line.startswith("[") and line.endswith("]"))):
+                                lines.append(line)
+                        if lines:
+                            return lines
+    except Exception as e:
+        print(f"[AZLyrics error] {e}")
+    return None
 
 def parole(song, artist):
+    # 1. lyrics.ovh
     try:
         url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(song)}"
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             lyrics_raw = response.json().get("lyrics", "")
-            if not lyrics_raw:
-                return None
-            result = [
-                textwrap.wrap(line, width=30)
-                for line in lyrics_raw.split('\n')
-                if line.strip()
-                and "(feat." not in line
-                and not (line.startswith('[') and line.endswith(']'))
-            ]
-            return result if result else None
+            if lyrics_raw:
+                result = [
+                    textwrap.wrap(line, width=30)
+                    for line in lyrics_raw.split('\n')
+                    if line.strip()
+                    and "(feat." not in line
+                    and not (line.startswith('[') and line.endswith(']'))
+                ]
+                if result:
+                    return result
     except Exception as e:
-        print(f"❌ Erreur lors de la récupération des paroles: {e}")
-        return None
+        print(f"⚠️ lyrics.ovh error: {e}")
+
+    # 2. AZLyrics
+    print(f"[AZLyrics fallback] {artist} - {song}")
+    lines = _azlyrics_get_lyrics(song, artist)
+    if lines:
+        return [textwrap.wrap(line, width=30) for line in lines if line.strip()]
+
+    # 3. Genius
+    print(f"[Genius fallback] {artist} - {song}")
+    lines = _genius_get_lyrics(artist, song)
+    if lines:
+        return [textwrap.wrap(line, width=30) for line in lines if line.strip()]
+    return None
 
 def get_album_cover(artist, song):
     cache_key = (edit(artist), edit(song))
@@ -116,10 +210,12 @@ def get_album_cover(artist, song):
         print("❌ Aucune image d'album trouvée")
         return None, None
 
+    if len(_album_cache) >= _ALBUM_CACHE_MAX:
+        _album_cache.pop(next(iter(_album_cache)))
     _album_cache[cache_key] = img
     return img, label
 
-def add_sun(draw, width, height, side):
+def add_sun(draw, width, _height, side):
     if side == 'right':
         x, y = width - 150, 200
         r = 80
@@ -338,8 +434,8 @@ async def button_handler(update, context):
 
         try:
             img2_bio, img1_bio = await asyncio.gather(
-                run_blocking(create_image, text, album_image, side='left', bg_color=bg_color, font_path=font_path),
-                run_blocking(create_image, song, album_image, side='right', bg_color=bg_color, font_path="arial.ttf")
+                run_blocking(create_image, text, album_image.copy(), side='left', bg_color=bg_color, font_path=font_path),
+                run_blocking(create_image, song, album_image.copy(), side='right', bg_color=bg_color, font_path="arial.ttf")
             )
 
             await query.message.reply_photo(photo=img1_bio, read_timeout=300, write_timeout=300, connect_timeout=300)
@@ -356,7 +452,7 @@ async def echo(update, context):
     message = update.message.text
     first_name = user.first_name or "Inconnu"
 
-    choose_line, titre, artist, song = split_message(message)
+    choose_line, _, artist, song = split_message(message)
     color_name = next((k for k, v in color_map.items() if v == user_colors.get(user_id)), '🔵 Bleu')
 
     if choose_line == "Erreur, format attendu : artiste:titre":
