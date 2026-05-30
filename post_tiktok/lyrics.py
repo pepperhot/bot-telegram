@@ -112,28 +112,6 @@ def _genius_get_lyrics(artist, song):
         print(f"❌ Genius fallback error: {e}")
         return None
 
-def _azlyrics_get_lyrics(song, artist):
-    url = f"https://www.azlyrics.com/lyrics/{edit(artist)}/{song}.html"
-    try:
-        response = requests.get(url, headers=_AZ_HEADERS, timeout=10)
-        response.encoding = "utf-8"
-        if response.status_code == 200:
-            for div in BeautifulSoup(response.text, "html.parser").find_all("div"):
-                if not div.get("class") and div.get_text(strip=True):
-                    lyrics_raw = div.get_text(separator="\n")
-                    if len(lyrics_raw.splitlines()) > 10:
-                        lines = []
-                        for line in lyrics_raw.split("\n"):
-                            line = re.sub(r'\([^)]*\)', '', line).strip()
-                            if (line
-                                and "Submit Corrections" not in line
-                                and not (line.startswith("[") and line.endswith("]"))):
-                                lines.append(line)
-                        if lines:
-                            return lines
-    except Exception as e:
-        print(f"[AZLyrics error] {e}")
-    return None
 
 def parole(song, artist):
     # 1. lyrics.ovh
@@ -155,13 +133,7 @@ def parole(song, artist):
     except Exception as e:
         print(f"⚠️ lyrics.ovh error: {e}")
 
-    # 2. AZLyrics
-    print(f"[AZLyrics fallback] {artist} - {song}")
-    lines = _azlyrics_get_lyrics(song, artist)
-    if lines:
-        return [textwrap.wrap(line, width=30) for line in lines if line.strip()]
-
-    # 3. Genius
+    # 2. Genius
     print(f"[Genius fallback] {artist} - {song}")
     lines = _genius_get_lyrics(artist, song)
     if lines:
