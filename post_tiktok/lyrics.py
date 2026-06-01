@@ -50,7 +50,6 @@ def split_message(message):
     artist, song = parts[0], parts[1]
     return True, edit(song), artist, song
 
-_AZ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 _album_cache: dict = {}
 _ALBUM_CACHE_MAX = 50
@@ -144,13 +143,12 @@ def get_album_cover(artist, song):
     cache_key = (edit(artist), edit(song))
     if cache_key in _album_cache:
         return _album_cache[cache_key], "cache"
-    artist = edit(artist)
-    query = f"{artist} {song}"
 
     img, label = None, None
 
     # --------------iTunes--------------
     try:
+        query = f"{artist} {song}"
         url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&media=music&limit=1"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -162,21 +160,18 @@ def get_album_cover(artist, song):
     except Exception as e:
         print(f"❌ iTunes failed: {e}")
 
-    # --------------Google--------------
+    # --------------Deezer--------------
     if img is None:
         try:
-            search_query = urllib.parse.quote(f"{artist} {song} album cover")
-            google_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
-            response = requests.get(google_url, headers=_AZ_HEADERS)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            img_tags = soup.find_all("img")
-            if len(img_tags) > 1:
-                img_src = img_tags[1].get("src")
-                if img_src and img_src.startswith("http"):
-                    img, label = Image.open(BytesIO(requests.get(img_src).content)), f"   Google Image: {img_src}"
+            q = requests.utils.quote(f"{artist} {song}")
+            r = requests.get(f"https://api.deezer.com/search?q={q}&limit=1", timeout=10)
+            data = r.json()
+            if data.get("data"):
+                img_url = data["data"][0]["album"]["cover_xl"]
+                img_data = requests.get(img_url).content
+                img, label = Image.open(BytesIO(img_data)), f"   Deezer Image: {img_url}"
         except Exception as e:
-            print(f"❌ Google Images failed: {e}")
+            print(f"❌ Deezer failed: {e}")
 
     if img is None:
         print("❌ Aucune image d'album trouvée")
